@@ -4,9 +4,12 @@ Cleans every microphone of a live multitrack recording: on each mic it keeps
 the source the mic is meant for and takes out what leaked in from the rest of
 the stage. The singers' voices come out of the instrument mics, the band comes
 out of the vocal mics, and on the backing vocal mics the lead singer is turned
-down. Made for concert recordings with many mics (bands with percussion, horns
-and several singers), developed and tested with recordings from
-[Ardour](https://ardour.org).
+down. Made for recordings with many mics (bands with percussion, horns and
+several singers), developed and tested on multitrack recordings of real live
+concerts and on studio sessions with bleed between the mics. The studio
+sessions were recorded in [Ardour](https://ardour.org), with takes and edits,
+and the app works from such a session directly: it cleans each take as it was
+edited.
 
 The result is one cleaned file per track, sample-aligned with the originals, so
 it goes back into the session next to the original tracks.
