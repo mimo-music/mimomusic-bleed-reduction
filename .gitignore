@@ -1,0 +1,3 @@
+# Python caches; the Python environment, network weights, caches and logs (tools/paths.py)
+__pycache__/
+work/
