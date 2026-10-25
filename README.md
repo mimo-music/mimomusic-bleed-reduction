@@ -69,7 +69,9 @@ bleed-reduction       # the app (also in the menu)
 2. Set the **role** of each track, or let **Suggest roles…** propose them.
 3. In the **Render** box choose what (whole recording, a song, from–to) and the
    quality, then **▶ Render**.
-4. The cleaned files are in `<project>/render/<track>.wav`.
+4. The cleaned files are in `<project>/render/<track>.wav`. From an Ardour
+   session: **Into Ardour…** puts each one on a "… Cleaned" track right below
+   its original (plugins, routing copied; the original muted), or updates it.
 
 To try it without a recording of your own: `python3 tools/make_demo.py
 /tmp/demo` writes a made-up eight-track band, then **New project…** → that
@@ -79,7 +81,7 @@ folder. The full guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 
 | | |
 |---|---|
-| [User guide](docs/USER_GUIDE.md) | install, projects, roles, rendering, getting the result into Ardour |
+| [User guide](docs/USER_GUIDE.md) | install, projects, roles, rendering, the round trip with Ardour |
 | [How it works](docs/HOW_IT_WORKS.md) | the cleaning per role, the networks, segments, quality, speed |
 | [Models and licenses](docs/THIRD_PARTY.md) | the networks and libraries used, their licenses and training data |
 
@@ -90,6 +92,7 @@ folder. The full guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
   suggest roles), `render.py` (the render), `steps/` (the processing steps),
   `scan.py` and `timeline.py` (delays, leak, songs), `device.py` (where the
   networks run), `export_raw_stems.sh` (tracks out of an Ardour session),
+  `to_ardour.py` (the renders back into it),
   `make_demo.py` (the made-up demo recording).
 - `tests/` — the tests below.
 
@@ -99,6 +102,7 @@ folder. The full guide: [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
 bash tests/demo_test.sh                  # demo recording, project, Draft render, the app's self-test
 bash tests/demo_test.sh --no-render      # the same without the networks
 bash tests/ardour_export_raw_test.sh     # Ardour session export (needs ardour9-lua)
+bash tests/ardour_to_test.sh             # into Ardour and back (needs ardour9-lua)
 ```
 
 ## License

@@ -40,7 +40,8 @@ Start `bleed-reduction` and click **New project…**:
     **Close the session in Ardour first.** Every audio track is exported as it
     is recorded and edited (takes, region gain, fades), without plugins, sends,
     fader, pan or mute. Stereo tracks become two tracks, `-L` and `-R`. The
-    session itself is not changed.
+    session itself is not changed. Tracks named "… Cleaned" (the cleaned
+    tracks **Into Ardour** made) or "… Denoised" (made by hand) are left out.
 
 **Create** imports. If the import fails, the reason stays in the panel on the
 start page (and in `work/logs/app.<computer>.log`).
@@ -105,20 +106,49 @@ Good to know:
 `<project>/render/<track>.wav` (**Open the render folder**): one file per track,
 32-bit float WAV at the recording's sample rate, exactly as long as the rendered
 range, so it lines up with the original when placed at the range's start.
+Each file carries a timestamp (BWF): imported by hand into Ardour, **Region →
+Position → Move to Original Position** puts it at the right place.
 
 **Listening in the app:** click a track. The player shows the original and the
 rendered version over the same range; **0** / **1** switch between them, **Space**
 plays, **Loop**, **Whole** (Esc) shows everything again.
 
-**Back into Ardour:** import the files (Session → Import, "add files as new
-tracks", position at the session start, or at the range's start for a part)
-next to the original tracks. An automatic round trip (re-import changed takes,
-update the cleaned tracks in the session) is planned, not built yet.
+## Into Ardour
+
+For a project imported from an Ardour session, the track list has an **into
+Ardour** column: ticked are the tracks that are cleaned (not "Don't clean");
+change it per track. **Into Ardour…** (in the Render box) shows what will change,
+**Into Ardour** does it. **Save and close the session in Ardour first.**
+
+For every ticked, rendered track:
+
+- **The first time:** a new track **"<name> Cleaned"** right below the original,
+  made as Ardour's *Duplicate* makes it (same plugins, sends, fader, pan, group
+  and outputs), with the rendered file on it at the recording's start. The
+  original track is **muted**.
+- **The next times:** the regions of its "… Cleaned" track are replaced by the
+  new render. Its plugins, fader, routing and mute stay as you set them. A
+  track you made by hand counts too, named "… Cleaned" or "… Denoised" (any
+  case: "Conga denoised"); it keeps its name. Renaming a track in Ardour
+  afterwards is fine: it is found by its id.
+
+The files are copied into the session (a new file each time; the recordings are
+never written to). The session file before the change is kept next to it as
+`<session>.ardour.bleed-backup`.
+
+**The round trip:** change takes in Ardour → close it → **Re-import…** (the
+Cleaned tracks are left out; each track keeps its settings, also when you
+renamed it in Ardour) → **▶ Render** (only what changed) → **Into Ardour**.
 
 ## Troubleshooting
 
-- **"the session seems open in Ardour"** — close it in Ardour (a crashed Ardour
-  can leave a `.pending` file in the session folder).
+- **"the session seems open in Ardour"** / **"crash-recovery file"** — close it
+  in Ardour. A crashed Ardour leaves a `.pending` file in the session folder:
+  open the session in Ardour once (it asks whether to recover), save, close.
+  A file sync (e.g. Nextcloud) can also leave a "conflicted copy" of one: check
+  it and remove it yourself.
+- **Into Ardour: "no track … in the session"** — the track was renamed in
+  Ardour before the project knew Ardour's track ids: **Re-import…** once.
 - **"ardour9-lua not found"** — install Ardour 9.
 - **The render stops with an error** — the log panel at the bottom shows it, the
   whole log is in `<project>/render/render.log`.

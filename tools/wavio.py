@@ -79,3 +79,52 @@ def note_made(path):
     d[os.path.basename(path)] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with open(m, "w") as f:
         json.dump(dict(sorted(d.items())), f, indent=1)
+
+
+def bext_chunk(time_ref, description=""):
+    """A BWF bext chunk: where the file starts on the timeline (in samples). Ardour reads it on
+    import: "Move to Original Position" puts the region there."""
+    now = time.localtime()
+    body = (description.encode("utf-8")[:256].ljust(256, b"\0") + b"Bleed Reduction".ljust(32, b"\0")
+            + b"\0" * 32 + time.strftime("%Y-%m-%d", now).encode() + time.strftime("%H:%M:%S", now).encode()
+            + struct.pack("<QH", int(time_ref), 1) + b"\0" * (64 + 10 + 180))
+    return b"bext" + struct.pack("<I", len(body)) + body
+
+
+def copy_with_bext(src, dst, time_ref, description=""):
+    """src (a RIFF WAV) to dst with a bext chunk saying it starts at sample time_ref; the samples
+    as they are. dst must not exist (never written over)."""
+    with open(src, "rb") as f:
+        if f.read(12)[8:12] != b"WAVE":
+            raise ValueError(f"{src}: not a RIFF/WAVE file")
+        fmt, data = None, None
+        while data is None:
+            h = f.read(8)
+            if len(h) < 8:
+                raise ValueError(f"{src}: no data chunk")
+            cid, n = h[:4], struct.unpack("<I", h[4:])[0]
+            if cid == b"fmt ":
+                fmt = f.read(n)
+                f.seek(n & 1, 1)
+            elif cid == b"data":
+                data = (f.tell(), min(n, os.path.getsize(src) - f.tell()))
+            else:
+                f.seek(n + (n & 1), 1)
+        if fmt is None:
+            raise ValueError(f"{src}: no fmt chunk")
+        bext = bext_chunk(time_ref, description)
+        fmt_chunk = b"fmt " + struct.pack("<I", len(fmt)) + fmt + b"\0" * (len(fmt) & 1)
+        n = data[1]
+        with open(dst, "xb") as o:
+            o.write(b"RIFF" + struct.pack("<I", 4 + len(fmt_chunk) + len(bext) + 8 + n + (n & 1)) + b"WAVE"
+                    + fmt_chunk + bext + b"data" + struct.pack("<I", n))
+            f.seek(data[0])
+            left = n
+            while left:
+                b = f.read(min(left, 1 << 24))
+                if not b:
+                    raise ValueError(f"{src}: shorter than its header says")
+                o.write(b)
+                left -= len(b)
+            if n & 1:
+                o.write(b"\0")

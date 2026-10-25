@@ -8,15 +8,19 @@
   python3 tools/project.py analyse <project folder> [--threads N]
   python3 tools/project.py show <project folder>
   python3 tools/project.py reimport <project folder> [--source FOLDER]
+  python3 tools/project.py to-ardour <project folder> [--tracks A,B] [--dry-run]
 
 new      the stems: a folder of WAV files (one per mic; the file name is the track's name),
          linked, not copied; or an Ardour session: every track exported unprocessed
-         (tools/export_raw_stems.sh) into <project>/stems/<id>/.
+         (tools/export_raw_stems.sh) into <project>/stems/<id>/; tracks named "... Cleaned"
+         (the results put into the session by to-ardour) are left out.
 reimport the recording again from the same source, with the same settings: exported into a fresh
-         stems folder, every track keeps its settings by name (also when its number changed:
-         "03 Conga" = "05 Conga"), new tracks are marked "new",
+         stems folder, every track keeps its settings by its Ardour track (also when it was
+         renamed), else by name (also when its number changed: "03 Conga" = "05 Conga"), new tracks are marked "new",
          tracks that are gone are dropped. The renders stay; the next render does only the tracks
          whose audio changed (tools/render.py). --source for projects made before the source was stored.
+to-ardour the rendered files into the Ardour session (tools/to_ardour.py): the tracks ticked
+         "into Ardour" (default: the ones that are cleaned).
 analyse  the basic analysis on the whole recording (minutes, then ~3 min per track on 8
          cores): delays and leak between the mics (scan.py), the songs (timeline.py), and
          per track how much voice it carries (vocal_share.py) -> a suggested role:
@@ -26,7 +30,10 @@ analyse  the basic analysis on the whole recording (minutes, then ~3 min per tra
 project.json:
   {"name", "id", "stems_dir", "created",
    "source": {"kind": "ardour" | "stems", "path"},
-   "tracks": {"<track>": {"file", "role", "lead", "role_set", "chain", "share_db", "new"}},
+   "tracks": {"<track>": {"file", "role", "lead", "role_set", "chain", "share_db", "new", "to_ardour",
+                          "ardour": {"route_id", "route", "channel", "channels"}}},
+   "ardour": {"start": the recording's first sample on the session's timeline, "rate",
+              "cleaned": {"<route id>": "<id of its Cleaned track>"}},
    "analysis": {"done", "songs": [[start, end], ...], "rate", "seconds"},
    "render": {"start", "end"}}
 chain "auto": vocal lead -> neural, vocal coro -> neural_xvoc, instrument / mixed ->
@@ -49,6 +56,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 from paths import work, VENV_PY  # noqa: E402
 from resources import default_threads, limit_threads  # noqa: E402
+from ardour_session import is_cleaned, read_export  # noqa: E402
 from scan import open_wav  # noqa: E402
 
 
@@ -69,9 +77,11 @@ def new(a):
     pid = new_id(a.name)
     source = {"kind": "ardour", "path": os.path.abspath(a.ardour)} if a.ardour else \
         {"kind": "stems", "path": os.path.abspath(a.stems)}
-    sd, tracks, rate = fetch(proj, pid, source)
+    sd, tracks, rate, rng = fetch(proj, pid, source)
     pj = {"name": a.name, "id": pid, "stems_dir": sd, "created": datetime.datetime.now().isoformat(timespec="seconds"),
           "source": source, "tracks": tracks, "analysis": {"done": False}, "render": {"start": 0, "end": None}}
+    if rng:
+        pj["ardour"] = {"start": rng["start"], "rate": rng["rate"]}
     save(proj, pj)
     print(f"project {a.name}: {len(tracks)} tracks, {rate} Hz -> {proj}")
 
@@ -82,7 +92,8 @@ def new_id(name):
 
 def fetch(proj, pid, source):
     """The source's tracks into <proj>/stems/<pid>/ (Ardour: exported; stems: linked).
-    Returns (stems folder, {track: fresh settings}, rate); removes the folder on failure."""
+    Returns (stems folder, {track: fresh settings}, rate, the Ardour range or None); removes the
+    folder on failure."""
     sd = os.path.join(proj, "stems", pid)
     os.makedirs(sd)
     try:
@@ -90,9 +101,11 @@ def fetch(proj, pid, source):
             rc = subprocess.call(["sh", os.path.join(HERE, "export_raw_stems.sh"), source["path"], sd])
             if rc:
                 sys.exit("the Ardour export failed (is the session closed in Ardour?)")
-            files = sorted(f for f in os.listdir(sd) if f.lower().endswith(".wav"))
+            files = sorted(f for f in os.listdir(sd) if f.lower().endswith(".wav")
+                           and not is_cleaned(re.sub(r"-[LR]$", "", os.path.splitext(f)[0])))
+            rng, ids = read_export(sd)
         else:
-            files = []
+            files, rng, ids = [], None, {}
             for f in sorted(os.listdir(source["path"])):
                 if f.lower().endswith(".wav") and open_wav(os.path.join(source["path"], f)) is not None:
                     os.symlink(os.path.join(source["path"], f), os.path.join(sd, f))
@@ -104,18 +117,30 @@ def fetch(proj, pid, source):
         for f in files:
             info = open_wav(os.path.join(sd, f))[1]
             rates.add(info["sr"])
-            tracks[os.path.splitext(f)[0]] = {"file": os.path.join(sd, f), "role": "instrument", "lead": False, "chain": "auto"}
+            n = os.path.splitext(f)[0]
+            tracks[n] = {"file": os.path.join(sd, f), "role": "instrument", "lead": False, "chain": "auto"}
+            if n in ids:
+                tracks[n]["ardour"] = ids[n]
         if len(rates) > 1:
             sys.exit(f"the files have different sample rates: {sorted(rates)}")
     except BaseException:
         shutil.rmtree(sd, ignore_errors=True)
         raise
-    return sd, tracks, rates.pop()
+    return sd, tracks, rates.pop(), rng
 
 
 def bare(name):
     """A track's name without the export's number: "03 Conga" -> "Conga"."""
     return re.sub(r"^\d+\s+", "", name)
+
+
+def same_place(a, b):
+    """The same number and channel, one name the beginning of the other: "12 Bass 1" / "12 Bass"."""
+    ma, mb = (re.match(r"^(\d+)\s+(.*?)(-[LR])?$", x) for x in (a, b))
+    if not ma or not mb or ma[1] != mb[1] or ma[3] != mb[3]:
+        return False
+    x, y = sorted((ma[2].lower(), mb[2].lower()), key=len)
+    return y.startswith(x + " ") and not is_cleaned(y)
 
 
 def reimport(a):
@@ -135,29 +160,52 @@ def reimport(a):
     from render import upgrade_work
     upgrade_work(proj, pj)
     pid = new_id(pj["name"])
-    sd, fresh, rate = fetch(proj, pid, source)
+    sd, fresh, rate, rng = fetch(proj, pid, source)
     old = pj["tracks"]
-    by_bare = {}
+    by_bare, by_route = {}, {}
     for n in old:
         by_bare.setdefault(bare(n), []).append(n)
-    keep = ("role", "lead", "role_set", "chain", "share_db")
-    tracks, kept, added, used = {}, [], [], set()
+        if "ardour" in old[n]:
+            by_route[(old[n]["ardour"]["route_id"], old[n]["ardour"]["channel"])] = n
+    keep = ("role", "lead", "role_set", "chain", "share_db", "to_ardour")
+    tracks, kept, added, used, renamed = {}, [], [], set(), {}
     for n, t in fresh.items():
         same = by_bare.get(bare(n), [])
-        o = n if n in old else same[0] if len(same) == 1 else None    # two old tracks of that name: no guess
+        o = by_route.get((t["ardour"]["route_id"], t["ardour"]["channel"])) if "ardour" in t else None
+        if not o:        # by name; two old tracks of that name: no guess
+            o = n if n in old else same[0] if len(same) == 1 else None
         if o and o not in used:
             used.add(o)
             t.update({k: old[o][k] for k in keep if k in old[o]})
             kept.append(n if o == n else f"{o} -> {n}")
+            if o != n:
+                renamed[o] = n
         else:
             t["new"] = True
             added.append(n)
         tracks[n] = t
+    # renamed in Ardour, in a project from before the export noted the tracks' ids: the same
+    # number, one name the beginning of the other ("12 Bass 1" -> "12 Bass"), nothing else
+    for n in list(added):
+        cand = [o for o in old if o not in used and same_place(o, n)]
+        if len(cand) == 1 and sum(same_place(cand[0], m) for m in added) == 1:
+            o = cand[0]
+            used.add(o)
+            t = tracks[n]
+            del t["new"]
+            t.update({k: old[o][k] for k in keep if k in old[o]})
+            kept.append(f"{o} -> {n}")
+            renamed[o] = n
+            added.remove(n)
     gone = [n for n in old if n not in used]
     old_sd = pj.get("stems_dir")
     pj.update(id=pid, stems_dir=sd, source=source, tracks=tracks,
               reimported=datetime.datetime.now().isoformat(timespec="seconds"))
+    if rng:
+        pj["ardour"] = {**pj.get("ardour", {}), "start": rng["start"], "rate": rng["rate"]}
     save(proj, pj)
+    from render import rename_tracks
+    rename_tracks(proj, renamed)          # what was rendered for them stays theirs
     # the old export is ours (inside the project): gone now; linked stems folders only hold links
     if old_sd and os.path.realpath(old_sd).startswith(os.path.join(proj, "stems") + os.sep) and old_sd != sd:
         shutil.rmtree(old_sd, ignore_errors=True)
@@ -214,6 +262,11 @@ def analyse(a):
     show(a)
 
 
+def to_ardour(a):
+    from to_ardour import run
+    run(os.path.abspath(a.project), a.tracks.split(",") if a.tracks else None, a.dry_run)
+
+
 def show(a):
     pj = load(os.path.abspath(a.project))
     sys.path.insert(0, HERE)
@@ -237,13 +290,17 @@ def main():
     p.add_argument("project")
     p.add_argument("--threads", type=int, default=default_threads(),
                    help="default: half the processor's threads, or BLEED_THREADS")
+    p = sub.add_parser("to-ardour")
+    p.add_argument("project")
+    p.add_argument("--tracks", help="only these (comma-separated; default: the ones ticked \"into Ardour\")")
+    p.add_argument("--dry-run", action="store_true", help="only say what would change")
     p = sub.add_parser("show")
     p.add_argument("project")
     p = sub.add_parser("reimport")
     p.add_argument("project")
     p.add_argument("--source", help="the Ardour session folder or the stems folder (default: the one it came from)")
     a = ap.parse_args()
-    {"new": new, "analyse": analyse, "show": show, "reimport": reimport}[a.cmd](a)
+    {"new": new, "analyse": analyse, "show": show, "reimport": reimport, "to-ardour": to_ardour}[a.cmd](a)
 
 
 if __name__ == "__main__":

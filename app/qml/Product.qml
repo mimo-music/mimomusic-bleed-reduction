@@ -135,6 +135,46 @@ ApplicationWindow {
             }
         }
     }
+    function ardourName(n) { return n.replace(/^\d+\s+/, "").replace(/-[LR]$/, "") }
+    Popup {
+        id: ardourDlg
+        anchors.centerIn: Overlay.overlay
+        width: 720
+        modal: true
+        padding: 20
+        background: Rectangle { color: Theme.panel; border.color: Theme.accent; radius: 4 }
+        ColumnLayout {
+            width: parent.width
+            spacing: 10
+            Text { text: "Into Ardour"; color: Theme.text; font.bold: true; font.pixelSize: 16 }
+            Text {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                color: Theme.dim
+                text: "Into " + studio.source + "\n\n"
+                      + "Save and close the session in Ardour first. For every track ticked \"into Ardour\": its render goes onto "
+                      + "the track \"<name> Cleaned\" (its regions replaced; its plugins, fader and mute stay as you set them). "
+                      + "Where there is none, it is made right below the original, as Ardour's Duplicate makes it (plugins, sends, "
+                      + "fader, group, outputs), and the original is muted. The files are copied into the session, at the "
+                      + "recording's start (also \"Move to Original Position\"); the recordings are not touched. "
+                      + "The session file before is kept next to it (.ardour.bleed-backup). Re-import leaves the Cleaned tracks out."
+            }
+            Text { text: "What changes:"; color: Theme.text }
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 220
+                TextArea { readOnly: true; text: studio.busy === "ardour" ? "…" : studio.log; font.family: "monospace"; font.pixelSize: 11; onTextChanged: cursorPosition = length
+                           color: Theme.dim; background: Rectangle { color: "#121317" } }
+            }
+            Row {
+                spacing: 8
+                Layout.alignment: Qt.AlignRight
+                Btn { text: "Cancel"; onClicked: ardourDlg.close() }
+                Btn { text: "Into Ardour"; checked: true; enabled: studio.busy === ""
+                      onClicked: { if (studio.toArdour(false)) ardourDlg.close() } }
+            }
+        }
+    }
     FolderDialog { id: openDlg; title: "Open a project"; onAccepted: studio.open(studio.urlToPath(selectedFolder)) }
     Popup {
         id: newDlg
@@ -308,7 +348,8 @@ ApplicationWindow {
                         Text { visible: win.showChains; text: "chain"; color: Theme.dim; font.pixelSize: 11; Layout.preferredWidth: 210 }
                         Text { text: "what happens"; color: Theme.dim; font.pixelSize: 11; Layout.preferredWidth: 380 }
                         Text { text: "voice"; color: Theme.dim; font.pixelSize: 11; Layout.preferredWidth: 60 }
-                        Text { text: "rendered"; color: Theme.dim; font.pixelSize: 11 }
+                        Text { text: "rendered"; color: Theme.dim; font.pixelSize: 11; Layout.preferredWidth: 60 }
+                        Text { visible: studio.fromArdour; text: "into Ardour"; color: Theme.dim; font.pixelSize: 11 }
                     }
                     ListView {
                         id: trackList
@@ -373,7 +414,16 @@ ApplicationWindow {
                                 }
                                 Text { Layout.preferredWidth: 60; color: Theme.dim; font.pixelSize: 11
                                        text: row.modelData.share_db !== undefined && row.modelData.share_db !== null ? Math.round(row.modelData.share_db) + 0 + " dB" : "" }
-                                Text { text: row.modelData.rendered ? "✓" : ""; color: Theme.wave }
+                                Text { text: row.modelData.rendered ? "✓" : ""; color: Theme.wave; Layout.preferredWidth: 60 }
+                                CheckBox {
+                                    visible: studio.fromArdour
+                                    implicitHeight: 28
+                                    checked: row.modelData.to_ardour
+                                    onToggled: win.keepScroll(() => studio.setTrack(row.modelData.name, "to_ardour", checked))
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: "Into Ardour puts this track's render into the session: on its \"" + win.ardourName(row.modelData.name)
+                                                  + " Cleaned\" track (made, below it, the original muted, if there is none)"
+                                }
                                 Item { Layout.fillWidth: true }
                             }
                         }
@@ -435,6 +485,11 @@ ApplicationWindow {
                                 tip: "only these tracks (if they changed). A vocal mic's clean voice is used for the coro mics and "
                                      + "the guided voice removal of the others: after changing one, Render all"
                             }
+                            Btn { implicitHeight: 40; visible: studio.fromArdour; text: studio.busy === "ardour" ? "Into Ardour …" : "Into Ardour…"
+                                  checked: studio.busy === "ardour"
+                                  enabled: studio.busy === "" && studio.rendered.finished !== undefined
+                                  onClicked: { studio.toArdour(true); ardourDlg.open() }
+                                  tip: "the rendered tracks ticked \"into Ardour\" into the session, each on a \"… Cleaned\" track below its original" }
                             Column {
                                 visible: studio.progress.fraction !== undefined
                                 spacing: 2
@@ -529,6 +584,12 @@ ApplicationWindow {
             check(studio.quality === "draft", "quality draft")
             studio.setQuality(q)
             check(studio.quality === q, "quality back: " + q)
+            // into Ardour: ticked where the track is cleaned, the tick stored
+            const c = studio.tracks.find(t => t.resolved !== "original"), k = studio.tracks.find(t => t.resolved === "original")
+            check(c.to_ardour === true && (!k || k.to_ardour === false), "into Ardour: ticked where cleaned")
+            studio.setTrack(c.name, "to_ardour", false)
+            check(studio.tracks.find(t => t.name === c.name).to_ardour === false, "into Ardour: unticked " + c.name)
+            studio.setTrack(c.name, "to_ardour", true)
             const r = studio.tracks.find(t => t.rendered)
             win.listen(r ? r.name : studio.tracks[0].name)
         },

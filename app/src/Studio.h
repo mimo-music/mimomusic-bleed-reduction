@@ -18,12 +18,13 @@ class Studio : public QObject {
     Q_PROPERTY(QString path READ path NOTIFY changed)
     Q_PROPERTY(QString name READ name NOTIFY changed)
     Q_PROPERTY(QString source READ source NOTIFY changed)          // the Ardour session / stems folder ("" in old projects)
+    Q_PROPERTY(bool fromArdour READ fromArdour NOTIFY changed)      // imported from an Ardour session: "Into Ardour" possible
     Q_PROPERTY(QVariantList tracks READ tracks NOTIFY changed)
     Q_PROPERTY(QVariantMap analysis READ analysis NOTIFY changed)
     Q_PROPERTY(double rangeStart READ rangeStart NOTIFY changed)
     Q_PROPERTY(double rangeEnd READ rangeEnd NOTIFY changed)      // 0: to the end
     Q_PROPERTY(QString quality READ quality NOTIFY changed)        // "final" (no buzz) or "draft" (~4x faster category step)
-    Q_PROPERTY(QString busy READ busy NOTIFY busyChanged)          // "", "import", "analyse", "render"
+    Q_PROPERTY(QString busy READ busy NOTIFY busyChanged)          // "", "import", "analyse", "reimport", "render", "ardour"
     Q_PROPERTY(QString log READ log NOTIFY logChanged)
     Q_PROPERTY(QVariantMap progress READ progress NOTIFY logChanged)
     Q_PROPERTY(QVariantMap rendered READ rendered NOTIFY changed)  // render/render.json
@@ -35,6 +36,7 @@ public:
     QString path() const { return m_path; }
     QString name() const { return m_pj.value(QStringLiteral("name")).toString(); }
     QString source() const { return m_pj.value(QStringLiteral("source")).toMap().value(QStringLiteral("path")).toString(); }
+    bool fromArdour() const { return m_pj.value(QStringLiteral("source")).toMap().value(QStringLiteral("kind")).toString() == QLatin1String("ardour"); }
     QVariantList tracks() const;
     QVariantMap analysis() const { return m_pj.value(QStringLiteral("analysis")).toMap(); }
     double rangeStart() const { return m_pj.value(QStringLiteral("render")).toMap().value(QStringLiteral("start")).toDouble(); }
@@ -54,6 +56,7 @@ public:
     Q_INVOKABLE bool create(const QString &path, const QString &name, const QString &source, bool ardour);
     Q_INVOKABLE bool analyse();
     Q_INVOKABLE bool reimport(const QString &source);   // "" = from where it came; settings kept by track name
+    Q_INVOKABLE bool toArdour(bool dryRun = false);     // the ticked rendered tracks into the session (tools/to_ardour.py)
     Q_INVOKABLE void setTrack(const QString &track, const QString &key, const QVariant &value);
     Q_INVOKABLE void setRole(const QStringList &names, const QString &role);   // lead, backing, instrument, keep
     Q_INVOKABLE void setTracks(const QStringList &names, const QString &key, const QVariant &value);   // one save

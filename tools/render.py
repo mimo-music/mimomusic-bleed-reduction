@@ -28,7 +28,8 @@ whose key changed is done again, the others are kept. The voice network's output
 novocal, the heavy part) stays in the segment for the next time, with the hash it came from.
 Then the segments are joined (linear crossfades over the overlaps; the chain outputs are
 sample-aligned with the input) into <project>/render/<track>.wav: 32-bit float, the
-recording's rate, exactly the length of the range, so they line up with the originals.
+recording's rate, exactly the length of the range, so they line up with the originals; a bext
+chunk holds where the file starts on the session's timeline (Ardour: "Move to Original Position").
 Progress: <project>/render/progress.json; log: <project>/render/render.log.
 """
 import argparse
@@ -50,7 +51,8 @@ sys.path.insert(0, HERE)
 from paths import VENV_PY  # noqa: E402
 from resources import default_threads, limit_threads  # noqa: E402
 from scan import open_wav, read_frames  # noqa: E402
-from wavio import write_wav  # noqa: E402
+from ardour_session import session_start  # noqa: E402
+from wavio import bext_chunk, write_wav  # noqa: E402
 
 # the processing's version: a finished segment of an older one is rendered again
 # 2: long digital silence cut out before the networks (silence.py)
@@ -101,25 +103,28 @@ def run(cmd, log, cwd=ROOT):
 
 
 class WavStream:
-    """A float32 mono WAV written in pieces (RF64 when it gets past 4 GB)."""
+    """A float32 mono WAV written in pieces (RF64 when it gets past 4 GB), with a bext chunk:
+    where it starts on the timeline (time_ref, samples; Ardour's "Move to Original Position")."""
 
-    def __init__(self, path, sr):
+    def __init__(self, path, sr, time_ref=0):
         self.path, self.sr, self.n = path, sr, 0
+        self.bext = bext_chunk(time_ref)
         self.f = open(path + ".part", "wb")
         self.f.write(self._header(0))
 
     def _header(self, n):
         data = n * 4
         fmt = struct.pack("<HHIIHH", 3, 1, self.sr, self.sr * 4, 4, 32)
-        if data + 36 + 36 < 2 ** 32:
-            return (b"RIFF" + struct.pack("<I", 4 + 8 + 16 + 8 + 28 + 8 + data) + b"WAVE"
+        head = 4 + 8 + 16 + 8 + 28 + len(self.bext) + 8
+        if data + head + 36 < 2 ** 32:
+            return (b"RIFF" + struct.pack("<I", head + data) + b"WAVE"
                     + b"fmt " + struct.pack("<I", 16) + fmt
                     + b"JUNK" + struct.pack("<I", 28) + b"\0" * 28        # room for ds64
-                    + b"data" + struct.pack("<I", data))
+                    + self.bext + b"data" + struct.pack("<I", data))
         return (b"RF64" + struct.pack("<I", 0xFFFFFFFF) + b"WAVE"
                 + b"fmt " + struct.pack("<I", 16) + fmt
-                + b"ds64" + struct.pack("<I", 28) + struct.pack("<QQQI", 4 + 8 + 16 + 8 + 28 + 8 + data, data, n, 0)
-                + b"data" + struct.pack("<I", 0xFFFFFFFF))
+                + b"ds64" + struct.pack("<I", 28) + struct.pack("<QQQI", head + data, data, n, 0)
+                + self.bext + b"data" + struct.pack("<I", 0xFFFFFFFF))
 
     def write(self, y):
         self.f.write(np.asarray(y, dtype="<f4").tobytes())
@@ -183,6 +188,47 @@ def upgrade_work(proj, pj):
                 keys[n] = track_key(n, c, hashes, vocal, leads, dj.get("shifts", 4))
         json.dump({"range": dj["range"], "tracks": keys, "net": {}}, open(done + ".tmp", "w"))
         os.replace(done + ".tmp", done)
+
+
+def rename_tracks(proj, renames):
+    """What was rendered for tracks that are named differently now ({old: new}; a re-import:
+    "05 Conga" is "04 Conga"): their files and keys under the new names, so the next
+    render keeps them."""
+    if not renames:
+        return
+    rn = lambda n: renames.get(n, n)                      # noqa: E731
+    tmp = {o: f".renaming-{i}" for i, o in enumerate(renames)}
+
+    def files(d):
+        for m in (tmp, {tmp[o]: n for o, n in renames.items()}):     # in two steps: names may swap
+            for f in sorted(os.listdir(d)):
+                a = next((a for a in m if f.startswith(a + ".")), None)
+                if a:
+                    os.rename(os.path.join(d, f), os.path.join(d, m[a] + f[len(a):]))
+
+    def key(k):
+        if "vocals" in k:
+            k["vocals"] = {rn(v): h for v, h in k["vocals"].items()}
+        if "leads" in k:
+            k["leads"] = sorted(rn(v) for v in k["leads"])
+        return k
+    def moved(d):          # a track that is gone may have had a renamed one's new name: the renamed wins
+        return sorted(d.items(), key=lambda x: x[0] in renames)
+    for done in sorted(glob.glob(os.path.join(proj, "work", "seg*", "done.json"))):
+        dj = json.load(open(done))
+        dj["tracks"] = {rn(n): key(k) for n, k in moved(dj.get("tracks", {}))}
+        dj["net"] = {rn(n): v for n, v in moved(dj.get("net", {}))}
+        files(os.path.dirname(done))
+        json.dump(dj, open(done + ".tmp", "w"))
+        os.replace(done + ".tmp", done)
+    out = os.path.join(proj, "render")
+    if os.path.isdir(out):
+        files(out)
+        rj = os.path.join(out, "render.json")
+        if os.path.exists(rj):
+            r = json.load(open(rj))
+            r["chains"] = {rn(n): c for n, c in moved(r.get("chains", {}))}
+            json.dump(r, open(rj, "w"), indent=1)
 
 
 def main():
@@ -368,6 +414,7 @@ def main():
     # join: linear crossfades over the overlaps; only the tracks with a newer piece than their file
     from wavio import read_wav
     seg_dirs = [os.path.join(proj, "work", f"seg{k:03d}") for k in range(nseg)]
+    origin = session_start(pj)          # the recording's sample 0 on the Ardour timeline (0: stems)
 
     def stale(n):
         out = os.path.join(out_dir, f"{n}.wav")
@@ -380,7 +427,7 @@ def main():
     join = [n for n in names if not same_range or stale(n)]
     log(f"joining the segments: {len(join)} of {len(names)} tracks" if join else "every track's file is up to date")
     for n in join:
-        w = WavStream(os.path.join(out_dir, f"{n}.wav"), sr)
+        w = WavStream(os.path.join(out_dir, f"{n}.wav"), sr, time_ref=origin + A)
         tail = None                     # the previous segment's samples past its end
         for k in range(nseg):
             s0, s1 = bounds[k], bounds[k + 1]

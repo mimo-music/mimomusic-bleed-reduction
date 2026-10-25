@@ -11,6 +11,8 @@
 -- region gain, fades, muted regions left out), no plugins, no sends, no fader, no pan, no
 -- track mute; in the session's own file format (sample format and header as recorded).
 -- One file per channel, as Ardour stores them: "NN <track>.wav", stereo "NN <track>-L.wav" / "-R.wav".
+-- Tracks named "... Cleaned" (or "... Denoised") are skipped: they hold Bleed Reduction's own results (tools/to_ardour.py).
+-- export.tsv lists the range and each file's track (by its id, which stays when the track is renamed).
 -- The bounces are written into the session and moved out (copied when the output is on another
 -- drive); the session is closed WITHOUT saving. export_raw_stems.sh gives it a stand-in copy of
 -- the session in a temporary folder, so the real one is only read.
@@ -76,11 +78,19 @@ local ok, err = pcall (function ()
 	local pos = {}
 	for i, r in ipairs (tracks) do pos[r:name ()] = i end
 	table.sort (tracks, function (a, b) return (order (a) or pos[a:name ()]) < (order (b) or pos[b:name ()]) end)
+	local tsv = assert (io.open (out .. "/export.tsv", "w"))
+	tsv:write (string.format ("range\t%d\t%d\t%d\n", s0, s1, rate))
 	local n = 0
-	for i, route in ipairs (tracks) do
+	local i = 0     -- the number in the file name: the place in the editor, the cleaned tracks not counted
+	for _, route in ipairs (tracks) do
 		local t = route:to_track ()
 		local pl = t:playlist ()
-		if pl:data_type ():to_string () ~= "audio" then
+		local lname = route:name ():lower ()
+		local cleaned = lname:match ("%scleaned%s*$") or lname:match ("%sdenoised%s*$")
+		if not cleaned then i = i + 1 end
+		if cleaned then
+			log (string.format ("skip %s: a cleaned track", route:name ()))
+		elseif pl:data_type ():to_string () ~= "audio" then
 			log (string.format ("skip %s: not audio", route:name ()))
 		elseif pl:region_list ():size () == 0 then
 			log (string.format ("skip %s: no regions", route:name ()))
@@ -104,10 +114,12 @@ local ok, err = pcall (function ()
 					if not copied then os.remove (dst) error ("could not move " .. src .. " to " .. dst .. ": " .. tostring (merr) .. " / " .. tostring (cerr)) end
 				end
 				log (string.format ("%s%s: %s", route:name (), suffix, dst))
+				tsv:write (string.format ("track\t%s\t%d\t%d\t%s\t%s\n", route:to_stateful ():id ():to_s (), c, nch, route:name (), base .. suffix .. ext))
 			end
 			n = n + 1
 		end
 	end
+	tsv:close ()
 	log (string.format ("DONE: %d tracks exported to %s", n, out))
 end)
 if not ok then log ("ERROR: " .. tostring (err)) failed = true end

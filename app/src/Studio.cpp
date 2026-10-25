@@ -87,6 +87,8 @@ QVariantList Studio::tracks() const
         m[QStringLiteral("ui_role")] = uiRole(m);
         m[QStringLiteral("resolved")] = chainOf(it.key());
         m[QStringLiteral("rendered")] = !renderedFile(it.key()).isEmpty();
+        if (!m.contains(QStringLiteral("to_ardour")))       // default: the ones that are cleaned
+            m[QStringLiteral("to_ardour")] = m[QStringLiteral("resolved")].toString() != QLatin1String("original");
         out << m;
     }
     return out;
@@ -255,6 +257,22 @@ bool Studio::reimport(const QString &source)
         open(p);                     // the summary (renamed / new / gone tracks) is in render.log: the log panel
         emit filesChanged();
         emit message(ok ? QStringLiteral("re-imported: check the new tracks, then Render") : QStringLiteral("the re-import failed (see the log)"));
+    });
+    return true;
+}
+
+bool Studio::toArdour(bool dryRun)
+{
+    if (!m_busy.isEmpty() || m_path.isEmpty() || renderPid() > 0 || !fromArdour())
+        return false;
+    QStringList args{QStringLiteral("tools/to_ardour.py"), m_path};
+    if (dryRun)
+        args << QStringLiteral("--dry-run");
+    run(QStringLiteral("ardour"), args, [this, dryRun](bool ok) {
+        const QString p = m_path;
+        open(p);                     // project.json notes the Cleaned tracks it made
+        if (!dryRun)
+            emit message(ok ? QStringLiteral("in Ardour: open the session") : QStringLiteral("into Ardour failed (see the log)"));
     });
     return true;
 }
