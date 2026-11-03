@@ -67,7 +67,36 @@ def save(proj, pj):
 
 
 def load(proj):
-    return json.load(open(os.path.join(proj, "project.json")))
+    pj = json.load(open(os.path.join(proj, "project.json")))
+    if relocate(proj, pj):
+        save(proj, pj)
+    return pj
+
+
+def relocate(proj, pj):
+    """A project that was moved (another computer, another folder): its paths from where it is
+    now. Its own stems (<project>/stems/<id>) move with it; the source too when it was at the
+    same place relative to the project (an Ardour session with the project in it: "..").
+    True if anything changed (the app does the same when it opens a project: Studio::migrate)."""
+    sd = pj.get("stems_dir")
+    if not sd or os.path.isdir(sd):
+        return False
+    old = os.path.dirname(os.path.dirname(sd))
+    if old == proj:
+        return False
+
+    def moved(p):
+        return proj + p[len(old):] if p == old or p.startswith(old + os.sep) else p
+    pj["stems_dir"] = moved(sd)
+    for t in pj["tracks"].values():
+        t["file"] = moved(t["file"])
+    src = pj.get("source")
+    if src and not os.path.isdir(src["path"]):
+        p = os.path.normpath(os.path.join(proj, os.path.relpath(src["path"], old)))
+        if os.path.isdir(p):
+            src["path"] = p
+    print(f"the project was moved: its paths from {old} are now from {proj}", flush=True)
+    return True
 
 
 def new(a):
@@ -204,15 +233,16 @@ def reimport(a):
     if rng:
         pj["ardour"] = {**pj.get("ardour", {}), "start": rng["start"], "rate": rng["rate"]}
     save(proj, pj)
-    from render import rename_tracks
-    rename_tracks(proj, renamed)          # what was rendered for them stays theirs
+    from render import drop_tracks, rename_tracks
+    drop_tracks(proj, gone)               # what was rendered for tracks that are gone (first: a
+    rename_tracks(proj, renamed)          # renamed one may take a gone one's name); the renamed keep theirs
     # the old export is ours (inside the project): gone now; linked stems folders only hold links
     if old_sd and os.path.realpath(old_sd).startswith(os.path.join(proj, "stems") + os.sep) and old_sd != sd:
         shutil.rmtree(old_sd, ignore_errors=True)
     msg = (f"re-imported from {source['path']}: {len(tracks)} tracks, {rate} Hz, {len(kept)} kept their settings"
            + "".join(f"\n  renamed: {k}" for k in kept if " -> " in k)
            + "".join(f"\n  new (set its role): {n}" for n in added)
-           + "".join(f"\n  gone: {n}" for n in gone)
+           + "".join(f"\n  gone (its render removed): {n}" for n in gone)
            + "\n  the next Render does only the tracks whose audio or settings changed")
     print(msg)
     # the app's log panel shows render/render.log: the summary goes there too

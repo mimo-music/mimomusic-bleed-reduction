@@ -72,7 +72,9 @@ The "what happens" column says the same for each track.
 - Mark **every** lead singer's mic as Lead vocal. Without any lead, the backing
   vocal step has to guess who the lead is.
 - **Chains** (top right) shows the processing chain per track, for trying other
-  combinations. Normally the role is enough.
+  combinations. Normally the role is enough. On a **DI bass** (or another line
+  signal with little treble) choose **novocal_guided_cat_mask** if you hear a
+  faint whine, like a switched-mode power supply, in the cleaned file.
 
 All settings are saved in `<project>/project.json` right away.
 
@@ -139,6 +141,14 @@ never written to). The session file before the change is kept next to it as
 **The round trip:** change takes in Ardour → close it → **Re-import…** (the
 Cleaned tracks are left out; each track keeps its settings, also when you
 renamed it in Ardour) → **▶ Render** (only what changed) → **Into Ardour**.
+Tracks of the session that are new come in as new tracks (set their role).
+Tracks the project has but the session not any more (deleted, or renamed in
+a project from before it knew Ardour's track ids) are taken out of the
+project, and what was rendered for them is deleted.
+
+**A project on another computer** (or moved, e.g. synced with Nextcloud): the
+app takes its paths from where the project is now, also the session's when the
+project is inside the session folder.
 
 ## Troubleshooting
 

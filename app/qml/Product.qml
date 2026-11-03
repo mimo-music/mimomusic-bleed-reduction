@@ -408,7 +408,8 @@ ApplicationWindow {
                                               novocal: "the voice removed",
                                               novocal_guided: "the voice removed where the vocal mics explain it",
                                               novocal_cat: "voice and other instruments removed",
-                                              novocal_guided_cat: "voice (where the vocal mics explain it) and other instruments removed" })[row.modelData.resolved] || "")
+                                              novocal_guided_cat: "voice (where the vocal mics explain it) and other instruments removed",
+                                              novocal_guided_cat_mask: "as guided cat, the network only as a gain on the mic: no whine (DI bass)" })[row.modelData.resolved] || "")
                                           + (row.modelData.new && !row.modelData.role_set ? "   · new: set its role"
                                              : row.modelData.role_set ? "" : "   · suggested")
                                 }

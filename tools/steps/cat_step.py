@@ -13,6 +13,8 @@ listening tests on violin, bongo and trumpet). One track of a song folder:
    drums, bass, other, vocals, guitar, piano; stems cached in work/stems/<concert>/<song>/
 2. the mic's own category = the loudest stem that isn't vocals (percussion: drums; tres:
    guitar; bass: bass; horns, violin: other), written as <track>.<tag>.out.wav
+   --mask: the category only as a gain on the network's input per frequency and moment, not
+   the network's own signal (which carries its whine, see masked())
 
 The stems stay in the cache, so another choice (two categories, another base) costs nothing.
 """
@@ -67,6 +69,30 @@ def keep_stems(lev):
     return [k for k in order if lev[k] >= lev[order[0]] - 6]
 
 
+WHINE = 44100 / 64     # the network's whine: 689 Hz and its overtones (it builds its output in steps of 64 samples at 44.1 kHz)
+
+
+def masked(x, s, sr):
+    """s (the network's own category of x) as a gain on x: per STFT bin (2048 samples) the gain
+    |s| / |x|, at most 1, on x's magnitude and phase. Only what is in x comes out, so not the
+    whine the network adds (689 Hz and overtones; heard on a DI bass under the hiss it removed,
+    where nothing covers it). At the whine's bins the gain is at most that of the bins around
+    them: there |s| holds the whine, and x's own hiss would stand out as a comb."""
+    from scipy.signal import istft, stft
+    n = min(len(x), len(s))
+    _, _, X = stft(x[:n], sr, nperseg=2048)
+    _, _, S = stft(s[:n], sr, nperseg=2048)
+    g = np.minimum(1.0, np.abs(S) / (np.abs(X) + 1e-12))
+    hz = sr / 2048
+    for k in range(2, int(sr / 2 / WHINE) + 1):
+        i = int(round(k * WHINE / hz))
+        if i + 4 >= len(g):
+            break
+        around = np.r_[i - 4:i - 1, i + 2:i + 5]
+        g[i - 1:i + 2] = np.minimum(g[i - 1:i + 2], g[around].mean(axis=0))
+    return istft(X * g, sr, nperseg=2048)[1][:n]
+
+
 def sum_stems(stems, keep):
     y, sr = read_wav(stems[keep[0]])
     y = y[:, 0].copy()
@@ -87,6 +113,7 @@ def main():
     ap.add_argument("--tag", default="novocal_cat")
     ap.add_argument("--shifts", type=int, default=4, help="network runs on shifted input, averaged: no frame-rate buzz "
                                                           "(1: the single run of the first versions)")
+    ap.add_argument("--mask", action="store_true", help="the category as a gain on the input (no whine of the network)")
     ap.add_argument("--stems-dir", help="where the network's stems are cached (default work/stems/<concert>/<song>)")
     ap.add_argument("--no-versions", action="store_true", help="don't write versions.json (the product's render)")
     a = ap.parse_args()
@@ -96,7 +123,9 @@ def main():
     lev = {k: db(read_wav(p)[0][:, 0]) - db(x) for k, p in stems.items()}
     keep = keep_stems(lev)
     y, sr = sum_stems(stems, keep)
-    own = "+".join(keep)
+    if a.mask:
+        y = masked(read_wav(os.path.join(a.folder, f"{a.track}.{a.base}.out.wav"))[0][:, 0], y, sr)
+    own = "+".join(keep) + (" (as a mask)" if a.mask else "")
     write_wav(os.path.join(a.folder, f"{a.track}.{a.tag}.out.wav"), y.astype(np.float32), sr)
     print(f"{a.track}: own category {own} ({lev[keep[0]]:+.1f} dB vs the original); others: "
           + " ".join(f"{k} {v:+.1f}" for k, v in sorted(lev.items()) if k not in keep))

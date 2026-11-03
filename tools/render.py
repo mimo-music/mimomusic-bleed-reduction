@@ -67,6 +67,7 @@ CHAINS = {
     "novocal_guided": ["novocal", "guided"],
     "novocal_cat": ["novocal", "cat"],
     "novocal_guided_cat": ["novocal", "guided", "cat"],
+    "novocal_guided_cat_mask": ["novocal", "guided", "cat", "mask"],   # the category network as a gain: no whine
 }
 AUTO = {"vocal": "neural", "coro": "neural_xvoc", "lead": "neural", "instrument": "novocal_guided_cat",
         "mixed": "novocal_guided_cat", "keep": "original", "line": "original", "silent": "original"}
@@ -188,6 +189,35 @@ def upgrade_work(proj, pj):
                 keys[n] = track_key(n, c, hashes, vocal, leads, dj.get("shifts", 4))
         json.dump({"range": dj["range"], "tracks": keys, "net": {}}, open(done + ".tmp", "w"))
         os.replace(done + ".tmp", done)
+
+
+def drop_tracks(proj, names):
+    """What was rendered for tracks that are not in the project any more (a re-import: renamed
+    in Ardour without the project knowing it, or deleted): their files and keys removed."""
+    if not names:
+        return
+    gone = set(names)
+
+    def files(d):
+        for f in os.listdir(d):
+            if any(f.startswith(n + ".") for n in gone):
+                os.remove(os.path.join(d, f))
+    for done in sorted(glob.glob(os.path.join(proj, "work", "seg*", "done.json"))):
+        dj = json.load(open(done))
+        for k in ("tracks", "net"):
+            if k in dj:
+                dj[k] = {n: v for n, v in dj[k].items() if n not in gone}
+        files(os.path.dirname(done))
+        json.dump(dj, open(done + ".tmp", "w"))
+        os.replace(done + ".tmp", done)
+    out = os.path.join(proj, "render")
+    if os.path.isdir(out):
+        files(out)
+        rj = os.path.join(out, "render.json")
+        if os.path.exists(rj):
+            r = json.load(open(rj))
+            r["chains"] = {n: c for n, c in r.get("chains", {}).items() if n not in gone}
+            json.dump(r, open(rj, "w"), indent=1)
 
 
 def rename_tracks(proj, renames):
@@ -389,7 +419,7 @@ def main():
                 log(f"  {n}: category network on {base}")
                 if run(["python3", "tools/steps/cat_step.py", d, n, "--base", base, "--tag", c,
                         "--threads", str(a.threads), "--stems-dir", os.path.join(d, "stems"), "--no-versions",
-                        "--shifts", str(shifts)], log):
+                        "--shifts", str(shifts)] + (["--mask"] if "mask" in CHAINS[c] else []), log):
                     sys.exit(f"{n}: the category network failed")
         # results: the chain's output (the original for "original"; a coro version missing -> neural)
         for n in redo:

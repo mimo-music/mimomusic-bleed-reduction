@@ -61,7 +61,21 @@ json.dump(pj, open(sys.argv[2], "w"), indent=1)
 ' "$S/rawtest.ardour" "$T/project/project.json" || exit 1
 python3 tools/to_ardour.py "$T/project" | tail -1 | sed 's/^/  /' || exit 1
 check 2
-python3 tools/project.py reimport "$T/project" > "$T/reimport.out" 2>&1; echo "  re-import: exit $?"
+# as if made on another computer (its paths elsewhere), with a track the session doesn't have any
+# more ("09 Gone", rendered): the re-import finds the session from where the project is now and
+# removes what was rendered for the gone track
+"$PY" -c '
+import json, os, shutil, sys
+T = sys.argv[1]
+p = os.path.join(T, "project", "project.json")
+s = open(p).read().replace(T, "/srv/elsewhere/x")
+pj = json.loads(s)
+pj["tracks"]["09 Gone"] = dict(pj["tracks"]["01 Mono"])
+del pj["tracks"]["09 Gone"]["ardour"]
+json.dump(pj, open(p, "w"), indent=1)
+shutil.copy(os.path.join(T, "project", "render", "01 Mono.wav"), os.path.join(T, "project", "render", "09 Gone.wav"))
+' "$T" || exit 1
+python3 tools/project.py reimport "$T/project" >"$T/reimport.out" 2>&1; echo "  re-import: exit $?"
 after="$(recs)"
 
 "$PY" - "$T" "$([ "$before" = "$after" ] && echo same || echo changed)" <<'EOF'
@@ -115,6 +129,12 @@ check("reimported" in pj and os.path.isfile(os.path.join(sd, "export.tsv")) and 
       and sorted(pj["tracks"]) == ["01 Mono", "02 Stereo-L", "02 Stereo-R"],
       f"re-import: the Cleaned tracks not exported, the numbers as before: {sorted(pj['tracks'])}")
 check(all("ardour" in t for t in pj["tracks"].values()), "re-import: every track knows its Ardour track")
+check(pj["source"]["path"] == f"{T}/session" and pj["stems_dir"].startswith(f"{T}/project/stems/")
+      and all(t["file"].startswith(sd) for t in pj["tracks"].values()),
+      f"re-import of a project made elsewhere: the session found from where the project is now: {pj['source']['path']}")
+check("09 Gone" not in pj["tracks"] and not os.path.exists(f"{T}/project/render/09 Gone.wav")
+      and os.path.exists(f"{T}/project/render/01 Mono.wav") and "gone (its render removed): 09 Gone" in open(f"{T}/reimport.out").read(),
+      "re-import: a track the session doesn't have any more: gone, its render removed, the others kept")
 check(recs == "same", "the session's recordings unchanged")
 check(os.path.exists(glob.glob(f"{T}/session/*.ardour")[0] + ".bleed-backup"), "the session file before is kept (.bleed-backup)")
 print("ALL PASSED" if not fails else f"{fails} FAILED")

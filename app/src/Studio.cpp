@@ -19,7 +19,8 @@
 // chain names and what "auto" means: as tools/render.py (CHAINS, AUTO)
 static const QStringList kChains{QStringLiteral("auto"), QStringLiteral("original"), QStringLiteral("neural"),
                                  QStringLiteral("neural_xvoc"), QStringLiteral("novocal"), QStringLiteral("novocal_guided"),
-                                 QStringLiteral("novocal_cat"), QStringLiteral("novocal_guided_cat")};
+                                 QStringLiteral("novocal_cat"), QStringLiteral("novocal_guided_cat"),
+                                 QStringLiteral("novocal_guided_cat_mask")};
 // the roles as the app shows them; stored as role (+ lead) in project.json:
 // lead / backing = vocal with lead true / false, keep = left as it is (old projects: line, silent)
 // (mixed: same chain as instrument, shown as instrument)
@@ -157,6 +158,32 @@ void Studio::migrate()
             any = true;
         }
         it.value() = t;
+    }
+    // a project that was moved (another computer, another folder): its paths from where it is
+    // now, as tools/project.py relocate() does
+    const QString sd = m_pj.value(QStringLiteral("stems_dir")).toString();
+    const QString old = QFileInfo(QFileInfo(sd).path()).path();
+    if (!sd.isEmpty() && !QFileInfo(sd).isDir() && old != m_path) {
+        const auto moved = [&](const QString &p) {
+            return p == old || p.startsWith(old + QLatin1Char('/')) ? m_path + p.mid(old.size()) : p;
+        };
+        m_pj[QStringLiteral("stems_dir")] = moved(sd);
+        for (auto it = tr.begin(); it != tr.end(); ++it) {
+            QVariantMap t = it.value().toMap();
+            t[QStringLiteral("file")] = moved(t.value(QStringLiteral("file")).toString());
+            it.value() = t;
+        }
+        QVariantMap src = m_pj.value(QStringLiteral("source")).toMap();
+        const QString sp = src.value(QStringLiteral("path")).toString();
+        if (!sp.isEmpty() && !QFileInfo(sp).isDir()) {
+            const QString p = QDir::cleanPath(QDir(m_path).absoluteFilePath(QDir(old).relativeFilePath(sp)));
+            if (QFileInfo(p).isDir()) {
+                src[QStringLiteral("path")] = p;
+                m_pj[QStringLiteral("source")] = src;
+            }
+        }
+        logInfo(QStringLiteral("product: the project was moved: its paths from %1 are now from %2").arg(old, m_path));
+        any = true;
     }
     if (any) {
         m_pj[QStringLiteral("tracks")] = tr;

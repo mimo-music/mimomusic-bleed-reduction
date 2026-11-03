@@ -60,6 +60,17 @@ one that isn't vocals (percussion → drums, tres → guitar, bass → bass, hor
 violin → other). Limitation: instruments of the **same** category bleeding into
 each other stay (a conga in the bongo mic: both are drums).
 
+**Instrument, the masked variant (novocal_guided_cat_mask, chosen per track with
+Chains).** The category network doesn't hand back the mic's sound: it rebuilds it,
+and in doing so adds a faint whine at 689 Hz and its overtones (44100 / 64: it builds
+its output in steps of 64 samples at 44.1 kHz, whatever the session's rate). Under an
+instrument it is covered; on a DI bass, with nothing above 2 kHz once the hiss is
+gone, it is heard (up to 33 dB over the bins around it). The masked variant uses the
+category only as a gain: per STFT bin (2048 samples) |category| / |mic|, at most 1,
+on the mic's own magnitude and phase, and at the whine's bins at most the gain of
+the bins around them. Only what is in the mic comes out. In blind listening it was
+never worse than the direct output, and better on DI bass and a trombone.
+
 **Don't clean (original).** A copy of the original over the range, so every track
 has a result file.
 
